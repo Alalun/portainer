@@ -1,6 +1,6 @@
 import _ from 'lodash-es';
 
-import { KubernetesNode, KubernetesNodeDetails } from 'Kubernetes/models/node/models';
+import { KubernetesNode, KubernetesNodeDetails } from 'Kubernetes/node/models';
 import KubernetesResourceReservationHelper from 'Kubernetes/helpers/resourceReservationHelper';
 
 class KubernetesNodeConverter {
@@ -39,6 +39,7 @@ class KubernetesNodeConverter {
     res.Version = data.status.nodeInfo.kubeletVersion;
     const internalIP = _.find(data.status.addresses, { type: 'InternalIP' });
     res.IPAddress = internalIP ? internalIP.address : '-';
+    res.Taints = data.spec.taints ? data.spec.taints : [];
     return res;
   }
 

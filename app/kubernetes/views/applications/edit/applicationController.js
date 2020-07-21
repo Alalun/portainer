@@ -1,9 +1,42 @@
 import angular from 'angular';
-import _ from 'lodash-es';
+import * as _ from 'lodash-es';
 import { KubernetesApplicationDataAccessPolicies, KubernetesApplicationDeploymentTypes } from 'Kubernetes/models/application/models';
 import KubernetesEventHelper from 'Kubernetes/helpers/eventHelper';
 import KubernetesApplicationHelper from 'Kubernetes/helpers/application';
 import { KubernetesServiceTypes } from 'Kubernetes/models/service/models';
+
+function computeConstraints(nodes, application) {
+  console.log(nodes)
+  // console.log(application)
+  const pod = application.Pods[0];
+  console.log(pod);
+  _.forEach(nodes, (n) => {
+    n.AcceptsApplication = false;
+    n.Expanded = false;
+    if (!pod) {
+      return;
+    }
+    n.UnmetTaints = [];
+    _.forEach(n.Taints, (t) => {
+      console.log(t)
+      const matchKeyMatchValueMatchEffect = _.find(pod.Tolerations, { Key: t.key, Operator: 'Equal', Value: t.value, Effect: t.effect });
+      const matchKeyAnyValueMatchEffect = _.find(pod.Tolerations, { Key: t.key, Operator: 'Exists', Effect: t.effect });
+      const matchKeyMatchValueAnyEffect = _.find(pod.Tolerations, { Key: t.key, Operator: 'Equal', Value: t.value, Effect: '' });
+      const matchKeyAnyValueAnyEffect = _.find(pod.Tolerations, { Key: t.key, Operator: 'Exists', Effect: '' });
+      const anyKeyAnyValueAnyEffect = _.find(pod.Tolerations, { Key: '', Operator: 'Exists', Effect: '' });
+      
+      if (!matchKeyMatchValueMatchEffect && !matchKeyAnyValueMatchEffect && !matchKeyMatchValueAnyEffect && !matchKeyAnyValueAnyEffect && !anyKeyAnyValueAnyEffect) {
+        n.AcceptsApplication = false;
+        n.UnmetTaints.push(t);
+      } else {
+        n.AcceptsApplication = true;
+      }
+    });
+  });
+  console.log(_.map(nodes, 'AcceptsApplication'))
+  console.log(_.map(nodes, 'UnmetTaints'))
+  return nodes;
+}
 
 class KubernetesApplicationController {
   /* @ngInject */
@@ -18,6 +51,7 @@ class KubernetesApplicationController {
     KubernetesEventService,
     KubernetesStackService,
     KubernetesPodService,
+    KubernetesNodeService,
     KubernetesNamespaceHelper
   ) {
     this.$async = $async;
@@ -31,6 +65,7 @@ class KubernetesApplicationController {
     this.KubernetesEventService = KubernetesEventService;
     this.KubernetesStackService = KubernetesStackService;
     this.KubernetesPodService = KubernetesPodService;
+    this.KubernetesNodeService = KubernetesNodeService;
 
     this.KubernetesNamespaceHelper = KubernetesNamespaceHelper;
 
@@ -100,10 +135,13 @@ class KubernetesApplicationController {
     return !rule.Host && !rule.IP ? false : true;
   }
 
+  hasConstraints() {
+    return _.filter(this.application.Pods, (item) => item.Tolerations.length > 0 || item.Affinities.length > 0).length > 0;
+  }
+
   /**
    * ROLLBACK
    */
-
   async rollbackApplicationAsync() {
     try {
       // await this.KubernetesApplicationService.rollback(this.application, this.formValues.SelectedRevision);
@@ -196,7 +234,11 @@ class KubernetesApplicationController {
   async getApplicationAsync() {
     try {
       this.state.dataLoading = true;
-      this.application = await this.KubernetesApplicationService.get(this.state.params.namespace, this.state.params.name);
+      const [application, nodes] = await Promise.all([
+        this.KubernetesApplicationService.get(this.state.params.namespace, this.state.params.name),
+        this.KubernetesNodeService.get(),
+      ]);
+      this.application = application;
       this.formValues.Note = this.application.Note;
       if (this.application.Note) {
         this.state.expandedNote = true;
@@ -204,6 +246,8 @@ class KubernetesApplicationController {
       if (this.application.CurrentRevision) {
         this.formValues.SelectedRevision = _.find(this.application.Revisions, { revision: this.application.CurrentRevision.revision });
       }
+
+      this.constraints = computeConstraints(nodes, this.application);
     } catch (err) {
       this.Notifications.error('Failure', err, 'Unable to retrieve application details');
     } finally {
@@ -230,6 +274,7 @@ class KubernetesApplicationController {
       },
       eventWarningCount: 0,
       expandedNote: false,
+      showConstraintsTranslation: false,
     };
 
     this.state.activeTab = this.LocalStorage.getActiveTab('application');
